@@ -1,5 +1,3 @@
-//go:build task_expected
-
 package task
 
 import (
