@@ -1,6 +1,6 @@
 //go:build task_template
 
-package task
+package main
 
 func IsPalindrome(str string) bool {
 	return false
