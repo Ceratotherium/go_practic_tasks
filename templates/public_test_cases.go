@@ -1,16 +1,22 @@
 package main
 
 type TestCase struct {
-	name string
+	name     string
+	input    []int
+	expected []int
 }
 
 var testCases = []TestCase{
 	// Публичные тесткейсы
 	{
-		name: "",
+		name:     "",
+		input:    nil,
+		expected: nil,
 	},
 	// Тесткейсы в помощь
 	{
-		name: "",
+		name:     "",
+		input:    nil,
+		expected: nil,
 	},
 }

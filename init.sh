@@ -15,29 +15,29 @@ chmod +x ./${new_package}/${task_name}/compile.sh
 
 echo "package main
 
- func main() {
- 	tests := append(testCases, privateTestCases...)
+func main() {
+  tests := append(testCases, privateTestCases...)
 
- 	for _, tt := range tests {
- 		AssertEqual(tt.name, tt.expected, ${test_func}, tt.input)
- 	}
- }
+  for _, tt := range tests {
+    AssertEqual(tt.name, tt.expected, ${test_func}, tt.input)
+  }
+}
 " > "./${new_package}/${task_name}/main.go"
 
 
 echo "//go:build task_template
 
- package main
+package main
 
- func ${test_func}${test_func_sign} {
- 	return
- }
+func ${test_func}${test_func_sign} {
+  return nil
+}
 " > "./${new_package}/${task_name}/task.go"
 
 
 echo "package main
 
 func ${test_func}${test_func_sign} {
-return
+  return nil
 }
 " > "./${new_package}/${task_name}/task_expected.go"

@@ -2,6 +2,8 @@ package main
 
 var privateTestCases = []TestCase{
 	{
-		name: "",
+		name:     "",
+		input:    nil,
+		expected: nil,
 	},
 }
