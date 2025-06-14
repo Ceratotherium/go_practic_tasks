@@ -69,7 +69,7 @@ func CustomTestBody[T any](message string, prepare func() T, check func(T) bool)
 }
 
 func AssertPrint(message string, expected string, cb func()) {
-	CustomTestBody(
+	ConcurrentCustomTestBody(
 		message,
 		func() string { return catchPrint(cb) },
 		func(actual string) bool {
