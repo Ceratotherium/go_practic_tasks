@@ -38,8 +38,6 @@ func SaveBackup(
 	processor Processor,
 	folder Folder,
 ) (resErr error) {
-	batchSize := int64(float64(maxFileSize) * minCompressionRate)
-
 	defer func() {
 		err := raw.Close() // Зависит от реализации (но обычно ошибку скипают из-за пустышки)
 		if resErr == nil {
@@ -47,45 +45,115 @@ func SaveBackup(
 		}
 	}()
 
-	buffer := bytes.NewBuffer(make([]byte, batchSize))
+	getBatch := readBatch(raw)
 
-	for batchNumber := int64(0); ; batchNumber++ {
-		buffer.Reset()
-		n, err := io.CopyN(buffer, raw, batchSize)
-		if err != nil && err != io.EOF {
-			return err
-		}
+	errGroup, ctx := errgroup.WithContext(context.Background())
+	for range maxProc {
+		errGroup.Go(func() error {
+			return saveByBatch(ctx, getBatch, processor, folder)
+		})
+	}
 
-		if n == 0 && errors.Is(err, io.EOF) {
+	return errGroup.Wait()
+}
+
+func saveByBatch(
+	ctx context.Context,
+	getBatch func(*bytes.Buffer, int64) (int64, error),
+	processor Processor,
+	folder Folder,
+) error {
+	batchSize := int64(float64(maxFileSize) * maxCompressionRate)
+	buffer := bytes.NewBuffer(make([]byte, 0, batchSize))
+
+	var (
+		err          error
+		readErr      error
+		batchNumber  int64
+		writeErrorCh chan error
+	)
+	getWriteError := func() error {
+		if writeErrorCh == nil {
 			return nil
 		}
-		processedData := processor.CompressAndEncrypt(io.LimitReader(buffer, n))
 
-		err = writeBatch(processedData, folder, batchNumber)
-		if err != nil {
+		return <-writeErrorCh
+	}
+
+	for ctx.Err() == nil && !errors.Is(readErr, io.EOF) {
+		batchNumber, readErr = getBatch(buffer, batchSize)
+		if readErr != nil && !errors.Is(readErr, io.EOF) || buffer.Len() == 0 {
+			break
+		}
+
+		processedData := processor.CompressAndEncrypt(buffer)
+		if err = getWriteError(); err != nil {
 			return err
 		}
+
+		if writeErrorCh, err = writeBatch(processedData, folder, batchNumber); err != nil {
+			return err
+		}
+	}
+
+	if err = getWriteError(); err != nil {
+		return err
+	}
+
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return readErr
+	}
+
+	return nil
+}
+
+func readBatch(raw io.Reader) func(*bytes.Buffer, int64) (int64, error) {
+	var batchNumber int64
+	mutex := &sync.Mutex{}
+
+	return func(buffer *bytes.Buffer, size int64) (int64, error) {
+		buffer.Reset()
+
+		mutex.Lock()
+		defer mutex.Unlock()
+
+		n, err := io.CopyN(buffer, raw, size)
+		if n == 0 {
+			return 0, io.EOF
+		}
+
+		currentBatch := batchNumber
+		batchNumber++
+
+		return currentBatch, err
 	}
 }
 
-func writeBatch(data io.Reader, folder Folder, batchNumber int64) error {
+func writeBatch(data io.Reader, folder Folder, batchNumber int64) (chan error, error) {
 	saveData, err := io.ReadAll(data)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	res := make(chan error, 1)
+	errGroup := &errgroup.Group{}
 
 	part := int64(0)
 	for dataStart := 0; dataStart < len(saveData); dataStart += maxFileSize {
 		fileName := makeFileName(batchNumber, part)
 		part++
 
-		err = writeFile(saveData[dataStart:min(dataStart+maxFileSize, len(saveData))], folder, fileName)
-		if err != nil {
-			return err
-		}
+		errGroup.Go(func() error {
+			return writeFile(saveData[dataStart:min(dataStart+maxFileSize, len(saveData))], folder, fileName)
+		})
 	}
 
-	return nil
+	go func() {
+		defer close(res)
+		res <- errGroup.Wait()
+	}()
+
+	return res, nil
 }
 
 func writeFile(data []byte, folder Folder, fileName string) (err error) {
@@ -138,6 +206,9 @@ func RestoreBackup(
 			defer close(processedDataCh[treadIndex])
 
 			var procErr error
+			loadGroup := &sync.WaitGroup{}
+			procGroup := &sync.WaitGroup{}
+
 			buffer := bytes.NewBuffer(make([]byte, 0, maxFileSize*maxCompressionRate))
 
 			loadedFiles := make([]io.ReadCloser, 0, maxPartsCount())
@@ -150,8 +221,13 @@ func RestoreBackup(
 				loadedFiles = loadedFiles[:len(filesByParts[fileIndex])]
 
 				for index, part := range filesByParts[fileIndex] {
-					loadedFiles[index] = folder.ReadFile(part)
+					wgGo(loadGroup, func() {
+						loadedFiles[index] = folder.ReadFile(part)
+					})
 				}
+
+				loadGroup.Wait()
+				procGroup.Wait()
 
 				buffer.Reset()
 				for index := range loadedFiles {
@@ -160,8 +236,12 @@ func RestoreBackup(
 					}
 				}
 
-				processedDataCh[treadIndex] <- processor.DecryptAndUncompress(buffer)
+				wgGo(procGroup, func() {
+					processedDataCh[treadIndex] <- processor.DecryptAndUncompress(buffer)
+				})
 			}
+
+			procGroup.Wait()
 
 			return procErr
 		})
