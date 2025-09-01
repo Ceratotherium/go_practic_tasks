@@ -2,6 +2,6 @@
 
 package main
 
-func fanOut(ctx context.Context, inputCh <-chan string, workers int, callback func(string) string) []<-chan string {
+func Process(in <-chan string, converter func(string) int, procNum int, sumCount int) <-chan int {
 	return nil
 }
